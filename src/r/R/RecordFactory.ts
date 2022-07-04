@@ -174,6 +174,15 @@ export class RecordFactory<T extends RT> {
     return this;
   }
 
+  deleteProperty(this: RecordFactory<T>, propertyName: string): RecordFactory<T> {
+    //@ts-ignore
+    if (this._json.props[propertyName]) {
+      //@ts-ignore
+      delete this._json.props[propertyName];
+    }
+    return this;
+  }
+
   addBlankRecord<N extends RT>(this: RecordFactory<T>, type: N, position?: number): RecordNode<N> {
     const record = createRecord(type);
     this.addRecord(record, position);
@@ -445,7 +454,7 @@ export class RecordFactory<T extends RT> {
   /** 
    * Once the clipboard has been converted into ClipboardR, this function can be used to merge into parent RecordNode 
    */
-  pasteFromClipboardObject(this: RecordFactory<T>, obj: ClipboardR, position?: number): void {
+  pasteFromClipboardObject(this: RecordFactory<T>, { obj, position }: {obj: ClipboardR, position?: number}): void {
     if(obj.parentType !== this._type) {
       console.error(`Can't paste this object into a RecordNode of type of ${this._type}`);
       return;
@@ -598,7 +607,7 @@ export class RecordFactory<T extends RT> {
    * else update property value directly in the RecordNode
    *
    */
-  updatePropertyAtAddress(this: RecordFactory<T>, addr: string, value: number | string | boolean): boolean {
+  updatePropertyAtAddress(this: RecordFactory<T>, addr: string, value: unknown): boolean {
     const recordAtAddress = this.getRecordAtAddress(addr);
     // find the matching property value string and then remove the ! from the lead
     const propertyAddr = addr.match(/!.*/)?.[0]?.replace("!", ""); // ex: !scene_yaw_correction

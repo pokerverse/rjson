@@ -55,15 +55,15 @@ const simpleGroupJson: RecordNode<RT.element> = {
   },
 };
 
-// describe("Test ElementFactory methods", () => {
-//   it("should paste a group inside another group with deduplicated child ids", () => {
-//     const simpleGroupJsonClone = deepClone(simpleGroupJson);
-//     const elementF = r.element(simpleGroupJsonClone);
-//     const group33 = elementF.getRecord(RT.element, 33);
-//     if (group33) {
-//       const cc = deepClone(elementF.copyToClipboardObject([33]));
-//       elementF.pasteFromClipboardObject(cc);
-//     }
+describe("Test ElementFactory methods", () => {
+  it("should paste a group inside another group with deduplicated child ids", () => {
+    const simpleGroupJsonClone = deepClone(simpleGroupJson);
+    const elementF = r.element(simpleGroupJsonClone);
+    const group33 = elementF.getRecord(RT.element, 33);
+    if (group33) {
+      const cc = deepClone(elementF.copyToClipboardObject([33]));
+      elementF.pasteFromClipboardObject({obj: cc});
+    }
 
 //     // check that the group with id 33 never changes
 //     expect(group33?.id).to.eq(33);
@@ -84,6 +84,6 @@ const simpleGroupJson: RecordNode<RT.element> = {
 //         expect(invalidIds.includes(c.id)).to.eq(false);
 //       }
 //     }
-//   });
-// });
+  });
+});
 

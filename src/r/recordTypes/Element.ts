@@ -1,4 +1,4 @@
-import { FileType } from "../../Definitions";
+import { FileType, BillboardingTypes } from "../../Definitions";
 
 
 export enum ElementProperty {
@@ -64,7 +64,9 @@ export enum ElementProperty {
   description = "description",
   price = "price",
   price_color = "price_color",
-  show_add_to_cart = "show_add_to_cart",
+  show_add_to_cart_button = "show_add_to_cart_button",
+  add_to_cart_button_text = "add_to_cart_button_text",
+  add_to_cart_button_link = "add_to_cart_button_link",
   chroma_effect = "chroma_effect",
   chroma_color = "chroma_color",
   share_attributes = "share_attributes",
@@ -147,7 +149,7 @@ export const elementPropertyDefaults: Record<ElementProperty, unknown> = {
   [ElementProperty.font_color]: "#FFF",
   [ElementProperty.pano_radius]: 900,
   [ElementProperty.audio_type]: "upload",
-  [ElementProperty.color]: "rgba(72, 72, 72, 0.8)",
+  [ElementProperty.color]: "#484848CC",
   [ElementProperty.pivot_point]: "center", // center|bottom|corner
   [ElementProperty.sides]: 3, // triangle
   [ElementProperty.radius]: 1,
@@ -191,14 +193,12 @@ export const elementPropertyDefaults: Record<ElementProperty, unknown> = {
   //@ts-ignore
   [ElementProperty.image_sources]: [],
   [ElementProperty.threed_source]: { uri: "" },
-  [ElementProperty.price_color]: "rgba(72, 72, 72, 0.8)",
-  [ElementProperty.show_add_to_cart]: {
-    show_cart_btn: false,
-    cart_btn_text: "Add to cart",
-    cart_btn_link: "#",
-  },
+  [ElementProperty.price_color]: "#484848CC",
+  [ElementProperty.show_add_to_cart_button]: false,
+  [ElementProperty.add_to_cart_button_text]: "Add to cart",
+  [ElementProperty.add_to_cart_button_link]: "#",
   [ElementProperty.chroma_effect]: false,
-  [ElementProperty.chroma_color]: "rgba(108, 175, 127, 1)",
+  [ElementProperty.chroma_color]: "#6CAF7F",
   [ElementProperty.share_attributes]: {
     instruction: "",
     url: "",
@@ -235,7 +235,7 @@ export const elementPropertyDefaults: Record<ElementProperty, unknown> = {
   [ElementProperty.light_type]: "ambient",
   [ElementProperty.intensity]: 1,
   [ElementProperty.fall_off]: 10,
-  [ElementProperty.billboarding]: false,
+  [ElementProperty.billboarding]: null,
   [ElementProperty.target_element_id]: null,
   [ElementProperty.media_upload_var_id]: 3000,
   // Other comprises of just PDF while defining this property

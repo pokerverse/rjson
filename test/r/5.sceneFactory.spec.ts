@@ -70,15 +70,15 @@ const simpleSceneJson: RecordNode<RT.scene> = {
   }
 };
 
-// describe("Test SceneFactory methods", () => {
-//   it("should paste a group inside a scene with deduplicated child ids", () => {
-//     const simpleSceneJsonClone = deepClone(simpleSceneJson);
-//     const sceneF = r.scene(simpleSceneJsonClone);
-//     const group2 = sceneF.getRecord(RT.element, 2);
-//     const cc = deepClone(sceneF.copyToClipboardObject([2]));
-//     // changing parentType here to be able to paste it inside a scene
-//     cc.parentType = RT.scene;
-//     sceneF.pasteFromClipboardObject(cc);
+describe("Test SceneFactory methods", () => {
+  it("should paste a group inside a scene with deduplicated child ids", () => {
+    const simpleSceneJsonClone = deepClone(simpleSceneJson);
+    const sceneF = r.scene(simpleSceneJsonClone);
+    const group2 = sceneF.getRecord(RT.element, 2);
+    const cc = deepClone(sceneF.copyToClipboardObject([2]));
+    // changing parentType here to be able to paste it inside a scene
+    cc.parentType = RT.scene;
+    sceneF.pasteFromClipboardObject({obj: cc});
 
 //     // check that the group with id 33 never changes
 //     expect(group2?.id).to.eq(2);
@@ -99,6 +99,6 @@ const simpleSceneJson: RecordNode<RT.scene> = {
 //         expect(invalidIds.includes(c.id)).to.eq(false);
 //       }
 //     }
-//   });
-// });
+  });
+});
 

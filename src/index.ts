@@ -1,10 +1,12 @@
-import { migrateProjectRJson, gv } from "./migrations";
+import { migrateProjectRJson, gv, createNewProject } from "./migrations";
 
 import {
   R, r, RF, rUtils,
   RecordNode, ROM, RecordMap, RT, RTP, rtp, createRecord, emptyROM,
   en, sn, vn, rn, CogObjectType, getFactory
 } from "./r";
+
+import { FileType, BillboardingTypes } from "./Definitions";
 
 export {
   R, r, RF, rUtils,
@@ -30,5 +32,8 @@ export {
 
 export {
   gv,
-  migrateProjectRJson
+  migrateProjectRJson,
+  createNewProject
 };
+
+export { FileType, BillboardingTypes };

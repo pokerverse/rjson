@@ -21,6 +21,9 @@ import { ShoppingProperty } from "../recordTypes/Shopping";
 import { MenuProperty } from "../recordTypes/Menu";
 import { ElementType } from "../definitions/elements/ElementSubTypes";
 import { RuleAction } from "../definitions/rules";
+import { getHighestRjsonVersion } from "../../migrations/rMigrations";
+import { migrationsForNewProject } from "../../migrations";
+import { isArrayTypeNode } from "typescript";
 
 const { deepClone, difference, union, intersection } = jsUtils;
 type variable = RT.variable;
@@ -52,20 +55,9 @@ export class ProjectFactory extends RecordFactory<RT.project> {
   addRecord<N extends RT>(this: ProjectFactory, record: RecordNode<N>, position?: number): RecordNode<N> {
     super.addRecord<N>(record, position);
     //Custom Record Types' Code
-    switch(record.type) {
+    switch (record.type) {
       case RT.scene: {
-        //Add menu entry. Calling super.addBlankRecord and not ProjectFactory.addBlankRecord because internally it call addRecord, 
-        //would end up in a cyclic call.
-        const menuRecord = super.addBlankRecord(RT.menu, record.id + 10001);
-        menuRecord.props.menu_scene_id = record.id;
-        menuRecord.props.menu_show = this.getValueOrDefault(rtp.project.auto_add_new_scene_to_menu);
-    
-        // Adding scene details every time to menu prop and making the boolean menu_show true / false based on the value given or default which is true.
-        if (this.getValueOrDefault(rtp.project.auto_add_new_scene_to_tour_mode) === true) {
-          //Making id deterministic (although not needed) - for testing
-          const tourModeRecord = super.addBlankRecord(RT.tour_mode, record.id + 10002);
-          tourModeRecord.props.tour_mode_scene_id = record.id;
-        }
+        this.addMenuAndTourModeRecord(record.id);
         break;
       }
       case RT.lead_gen_field: {
@@ -92,9 +84,9 @@ export class ProjectFactory extends RecordFactory<RT.project> {
     const oldRecordName = this.getRecord(type, id)?.name;
     const record = super.changeRecordName<N>(type, id, newName);
     const newRecordName = record?.name; //Don't use newName as the new name, it might have undergone transformation
-    if (oldRecordName === undefined || newRecordName === undefined) return undefined;  
+    if (oldRecordName === undefined || newRecordName === undefined) return undefined;
     //Custom Record Types' Code
-    switch(type) {
+    switch (type) {
       case RT.variable: {
         const records = ProjectUtils.getAllTemplatedRecords(this._json);
         ProjectUtils.updateStringTemplates(records, oldRecordName, newRecordName);
@@ -109,66 +101,29 @@ export class ProjectFactory extends RecordFactory<RT.project> {
     return record;
   }
 
-  addElementOfTypeToScene (this: ProjectFactory, { sceneId, elementType, position, groupElementId }: { sceneId: number, elementType: ElementType, position?: number, groupElementId?: number }): RecordNode<RT.element> | undefined {
+  addElementOfTypeToScene(this: ProjectFactory, { sceneId, elementType, position, groupElementId }: { sceneId: number, elementType: ElementType, position?: number, groupElementId?: number }): RecordNode<RT.element> | undefined {
     const defaultName = ElementUtils.getElementDefinition(elementType).elementDefaultName;
     const newElement = createRecord<RT.element>(RT.element, undefined, defaultName);
     newElement.props = ElementUtils.getElementTypeDefaults(elementType);
     newElement.props.element_type = elementType;
-    const newRecord = this.addSceneSubDeepRecord<RT.element>(sceneId, newElement, position, groupElementId);
+    const newRecord = this.addSceneDeepRecord<RT.element>({ sceneId, record: newElement, position, groupElementId });
     return newRecord;
   }
 
   /** 
-   * Upating addSceneSubRecord here.
-   * Difference => this function will take groupElementId and will reparent the record to that group if it's provided.
-   * Also, adding linked variables for elements like media_upload and embed_scorm using addLinkedVariables.
+   * Updated version of addSceneSubRecord
+   * Takes in groupElementId to add record to nth level as well.
    */
-  addSceneSubDeepRecord<N extends RT>(this: ProjectFactory, sceneId: number, record: RecordNode<N>, position?: number, groupElementId?: number): RecordNode<N> | undefined {
+  addSceneDeepRecord<N extends RT>(this: ProjectFactory, { sceneId, record, position, groupElementId }: { sceneId: number, record: RecordNode<N>, position?: number, groupElementId?: number }): RecordNode<N> | undefined {
     const sceneJson = this.getRecord(RT.scene, sceneId);
     if (sceneJson !== undefined) {
-      const addedRecord = (new SceneFactory(sceneJson)).addRecord(record, position);
-
-      /*
-      if the record needs to be in a group inside this scene (this function would not be called to move the added record to a different scene),
-      get relevant addresses and re-parent the record
-      */
-      if(groupElementId) {
-        const scene = this.getRecord(RT.scene, sceneId) as RecordNode<RT.scene>;
-        const sceneF = new SceneFactory(scene);
-
-        const destParentAddr = `project:${this._json.id}|${sceneF.getDeepRecordAddress(groupElementId, RT.element)}`;
-
-        const recordAddr = sceneF.getDeepRecordAddress(record.id, RT.element);
-        const sourceRecordAddr: { parentAddr: string; recordAddr: string; }[] = [{
-          recordAddr: `project:${this._json.id}|${recordAddr}`,
-          parentAddr: `project:${this._json.id}|scene:${sceneId}`
-        }];
-        
-        this.reParentRecordsWithAddress(destParentAddr, sourceRecordAddr);
+      const addedRecord = (new SceneFactory(sceneJson)).addDeepRecord({ record, position, groupElementId });
+      if (addedRecord !== undefined) {
+        this.addLinkedVariables([addedRecord as RecordNode<N>]);
+        return addedRecord;
       }
-
-      if (addedRecord?.type === RT.element) {
-        this.addLinkedVariables(addedRecord);
-      }
-
-      return addedRecord;
     }
-  }
-  
-  /**
-   * !! DEPRECATING THIS FUNCTION. INSTEAD USE addSceneSubDeepRecord.
-   * Ideally elements should get added via SceneFactory. But because we want addition of media_upload element to add a linked variable, 
-   * we do this via ProjectFactory (as only ProjectFactory has access to variables).
-   */
-  addSceneSubRecord<N extends RT>(this: ProjectFactory, sceneId: number, record: RecordNode<N>, position?: number): RecordNode<N> | undefined {
-    const sceneJson = this.getRecord(RT.scene, sceneId);
-    if(sceneJson !== undefined) {
-      const addedRecord = (new SceneFactory(sceneJson)).addRecord(record, position);
-      if(addedRecord?.type === RT.element) {
-        this.addLinkedVariables(addedRecord);
-      }
-      return addedRecord;
-    }
+    return;
   }
 
   /** 
@@ -177,12 +132,12 @@ export class ProjectFactory extends RecordFactory<RT.project> {
    */
   changeSceneSubRecordName<N extends RT>(this: ProjectFactory, sceneId: number, type: N, id: number, newName?: string): RecordNode<N> | undefined {
     const sceneJson = this.getRecord(RT.scene, sceneId);
-    if(sceneJson !== undefined) {
+    if (sceneJson !== undefined) {
       const record = (new SceneFactory(sceneJson)).changeDeepRecordName(type, id, newName);
       const newRecordName = record?.name;
-      if(newRecordName !== undefined && record?.type === RT.element) {
+      if (newRecordName !== undefined && record?.type === RT.element) {
         const currentRecord = (record as RecordNode<RT.element>);
-        switch(currentRecord.props.element_type) {
+        switch (currentRecord.props.element_type) {
           case ElementType.media_upload: {
             const linkedVarId = currentRecord.props.media_upload_var_id as number;
             this.changeRecordName(RT.variable, linkedVarId, varNameFromOriginName(newRecordName));
@@ -198,7 +153,7 @@ export class ProjectFactory extends RecordFactory<RT.project> {
 
             const linkedProgressVarId = currentRecord.props.embed_scorm_progress_var_id as number;
             this.changeRecordName(RT.variable, linkedProgressVarId, varNameFromOriginName(newRecordName));
-            
+
             break;
           }
         }
@@ -211,67 +166,59 @@ export class ProjectFactory extends RecordFactory<RT.project> {
    * Ideally elements should get deleted via SceneFactory. But because we want deletion of media_upload element to delete the linked
    * variable, we do this via ProjectFactory (as only ProjectFactory has access to variables).
    */
-  deleteSceneSubRecord<N extends RT>(this: ProjectFactory, sceneId: number, type: N, id: number): RecordNode<N> | undefined {
+  deleteSceneDeepRecord<N extends RT>(this: ProjectFactory, sceneId: number, type: N, id: number): RecordNode<N> | undefined {
     const sceneJson = this.getRecord(RT.scene, sceneId);
-    if(sceneJson !== undefined) {
+    if (sceneJson !== undefined) {
       const record = (new SceneFactory(sceneJson)).deleteDeepRecord(type, id);
-      if(record?.type === RT.element) {
-        const currentRecord = (record as RecordNode<RT.element>);
+      if (record !== undefined) {
+        const recordsWithLinkedVariables = this.getAllRecordsForLinkedVariables([record as RecordNode<N>]);
+        this.deleteLinkedVariables(recordsWithLinkedVariables);
+        return record;
+      }
+    }
+    return;
+  }
 
-        switch(currentRecord.props.element_type) {
-          case ElementType.media_upload: {
-            const linkedVarId = currentRecord.props.media_upload_var_id as number;
-            this.deleteRecord(RT.variable, linkedVarId);
-            break;
-          }
+  /** 
+   * Update from previous function.
+   * This has been written in Project Factory so that we can add linked variables to elements like SCORM and Media Upload
+   * since only Project Factory has access to variables. 
+   */
+  duplicateSceneDeepRecord<N extends RT>(this: ProjectFactory, sceneId: number, type: N, id: number): RecordNode<N> | undefined {
+    const sceneJson = this.getRecord(RT.scene, sceneId);
+    if (sceneJson !== undefined) {
+      const sceneF = (new SceneFactory(sceneJson));
+      const duplicatedRecord = sceneF.duplicateDeepRecord(type, id);
+      if (duplicatedRecord !== undefined) {
+        const recordsWithLinkedVariables = this.getAllRecordsForLinkedVariables([duplicatedRecord as RecordNode<N>]);
+        this.addLinkedVariables(recordsWithLinkedVariables);
+        return duplicatedRecord;
+      }
+    }
+    return;
+  }
 
-          case ElementType.embed_scorm: {
-            const linkedScoreVarId = currentRecord.props.embed_scorm_score_var_id as number;
-            this.deleteRecord(RT.variable, linkedScoreVarId);
+  /** 
+   * Override from record factory
+   * Since only Project Factory has access to variables, get the deep records in the override and add the linked variables for SCORM and Media Upload.
+   */
+  duplicateDeepRecord<N extends RT>(this: ProjectFactory, type: N, id: number): RecordNode<N> | undefined {
+    const duplicatedRecord = super.duplicateDeepRecord(type, id);
 
-            const linkedSuspedDataVarId = currentRecord.props.embed_scorm_suspend_data_var_id as number;
-            this.deleteRecord(RT.variable, linkedSuspedDataVarId);
-
-            const linkedProgressVarId = currentRecord.props.embed_scorm_progress_var_id as number;
-            this.deleteRecord(RT.variable, linkedProgressVarId);
-
-            break;
-          }
+    if (duplicatedRecord !== undefined) {
+      switch (type) {
+        case RT.scene: {
+          const sceneF = new SceneFactory(duplicatedRecord);
+          const elements = sceneF.getAllDeepChildrenWithFilter(RT.element, e => en.elementsWithLinkedVariables.includes(e.props.element_type as ElementType));
+          this.addLinkedVariables(elements as RecordNode<N>[]);
+          this.addMenuAndTourModeRecord(duplicatedRecord.id);
+          break;
         }
       }
-      return record;
+      return duplicatedRecord;
     }
-  }
 
-  /**
-   * Ideally elements should get duplicated via SceneFactory. But because we want duplication of media_upload element to duplicate the linked
-   * variable, we do this via ProjectFactory (as only ProjectFactory has access to variables).
-   * 
-   * NOTE: duplicateDeepRecord calls addDeepRecord internally.
-   * So why even override duplicate? (Add should take care of the additional conditions.)
-   * Because SceneFactory's duplicate calls SceneFactory's add,
-   * but our additional conditions are added to ProjectFactory's duplicateDeepRecord, which does NOT call addSceneSubRecord. 
-   */
-  duplicateSceneSubRecord<N extends RT>(this: ProjectFactory, sceneId: number, type: N, id: number): RecordNode<N> | undefined {
-    const sceneJson = this.getRecord(RT.scene, sceneId);
-    if(sceneJson !== undefined) {
-      const record = (new SceneFactory(sceneJson)).duplicateDeepRecord(type, id);
-      if(record?.type === RT.element) {
-        this.addLinkedVariables(record);
-      }
-      return record;
-    }
-  }
-
-  duplicateSceneDeepRecord<N extends RT>(this: ProjectFactory, sceneId: number, type: N, id: number, groupElementId: number): RecordNode<N> | undefined {
-    const sceneJson = this.getRecord(RT.scene, sceneId);
-    if(sceneJson !== undefined) {
-      const record = (new SceneFactory(sceneJson)).duplicateDeepRecord(type, id);
-      if(record?.type === RT.element) {
-        this.addLinkedVariables(record);
-      }
-      return record;
-    }
+    return;
   }
 
   /**
@@ -281,7 +228,7 @@ export class ProjectFactory extends RecordFactory<RT.project> {
    * lead_gen_field: Should delete the linked autogenerated variable
    */
   deleteRecord<N extends RT>(this: ProjectFactory, type: N, id: number): RecordNode<N> | undefined {
-    switch(type) {
+    switch (type) {
       case RT.variable: {
         for (const scene of this.getRecords(RT.scene)) {
           (new SceneFactory(scene)).deleteRulesForCoId(id);
@@ -289,14 +236,20 @@ export class ProjectFactory extends RecordFactory<RT.project> {
         break;
       }
       case RT.scene: {
-        for (const record of this.getRecords(RT.menu)) {
-          if ((new RecordFactory(record)).get(rtp.menu.menu_scene_id) === id) {
-            this.deleteRecord(RT.menu, record.id);
+        const scene = this.getRecord(RT.scene, id);
+        if (scene !== undefined) {
+          const sceneF = new SceneFactory(scene);
+          const childrenWithLinkedVariables = sceneF.getAllDeepChildrenWithFilter(RT.element, e => en.elementsWithLinkedVariables.includes(e.props.element_type as ElementType));
+          this.deleteLinkedVariables(childrenWithLinkedVariables);
+          for (const record of this.getRecords(RT.menu)) {
+            if ((new RecordFactory(record)).get(rtp.menu.menu_scene_id) === id) {
+              this.deleteRecord(RT.menu, record.id);
+            }
           }
-        }
-        for (const record of this.getRecords(RT.tour_mode)) {
-          if ((new RecordFactory(record)).get(rtp.tour_mode.tour_mode_scene_id) === id) {
-            this.deleteRecord(RT.tour_mode, record.id);
+          for (const record of this.getRecords(RT.tour_mode)) {
+            if ((new RecordFactory(record)).get(rtp.tour_mode.tour_mode_scene_id) === id) {
+              this.deleteRecord(RT.tour_mode, record.id);
+            }
           }
         }
         break;
@@ -304,9 +257,9 @@ export class ProjectFactory extends RecordFactory<RT.project> {
       case RT.lead_gen_field: {
         const leadGenField = this.getRecord(RT.lead_gen_field, id);
         const varId = leadGenField?.props.var_id as number;
-        if(varId !== undefined) {
+        if (varId !== undefined) {
           const variable = this.getRecord(RT.variable, varId);
-          if(variable !== undefined) {
+          if (variable !== undefined) {
             this.deleteRecord(RT.variable, varId);
           }
         }
@@ -373,43 +326,84 @@ export class ProjectFactory extends RecordFactory<RT.project> {
     }
   }
 
-  addLinkedVariables<N extends RT>(this: ProjectFactory, record: RecordNode<N>): void {
-    switch((record as RecordNode<RT.element>).props.element_type) {
-      case ElementType.media_upload: {
-        const variableRecord = this.addVariableOfType(VariableType.string);
-        variableRecord.props.var_category = VarCategory.autogenerated;
-        variableRecord.props.var_track = true;
-        variableRecord.props.var_default = "";
-        //Keep the name of the variable same as the lead gen field
-        //Going via changeRecordName to take care of duplicate names
-        this.changeRecordName(RT.variable, variableRecord.id, varNameFromOriginName(record.name));
-        //Link lead gen field to the variable id
-        (record as RecordNode<RT.element>).props.media_upload_var_id = variableRecord.id;
-        break;
+  /** 
+   * Function to be used to add linked variables for element types like SCORM and Media Upload.
+   * Just need to update this function for any other element type to be added in future
+   * Takes the elements as an array and adds variables to project factory
+   */
+  addLinkedVariables<N extends RT>(this: ProjectFactory, records: RecordNode<N>[]): void {
+    for (const record of records) {
+      if (record?.type === RT.element) {
+        switch ((record as RecordNode<RT.element>).props.element_type) {
+          case ElementType.media_upload: {
+            const variableRecord = this.addVariableOfType(VariableType.string);
+            variableRecord.props.var_category = VarCategory.autogenerated;
+            variableRecord.props.var_track = true;
+            variableRecord.props.var_default = "";
+            //Keep the name of the variable same as the lead gen field
+            //Going via changeRecordName to take care of duplicate names
+            this.changeRecordName(RT.variable, variableRecord.id, varNameFromOriginName(record.name));
+            //Link lead gen field to the variable id
+            (record as RecordNode<RT.element>).props.media_upload_var_id = variableRecord.id;
+            break;
+          }
+
+          case ElementType.embed_scorm: {
+            const scoreVariableRecord = this.addVariableOfType(VariableType.number);
+            scoreVariableRecord.props.var_category = VarCategory.autogenerated;
+            scoreVariableRecord.props.var_track = true;
+            scoreVariableRecord.props.var_default = 0;
+            this.changeRecordName(RT.variable, scoreVariableRecord.id, varNameFromOriginName(record.name));
+            (record as RecordNode<RT.element>).props.embed_scorm_score_var_id = scoreVariableRecord.id;
+
+            const suspendDataVariableRecord = this.addVariableOfType(VariableType.string);
+            suspendDataVariableRecord.props.var_category = VarCategory.autogenerated;
+            suspendDataVariableRecord.props.var_track = true;
+            suspendDataVariableRecord.props.var_default = 0;
+            this.changeRecordName(RT.variable, suspendDataVariableRecord.id, varNameFromOriginName(record.name));
+            (record as RecordNode<RT.element>).props.embed_scorm_suspend_data_var_id = suspendDataVariableRecord.id;
+
+            const progressVariableRecord = this.addVariableOfType(VariableType.number);
+            progressVariableRecord.props.var_category = VarCategory.autogenerated;
+            progressVariableRecord.props.var_track = true;
+            progressVariableRecord.props.var_default = 0;
+            this.changeRecordName(RT.variable, progressVariableRecord.id, varNameFromOriginName(record.name));
+            (record as RecordNode<RT.element>).props.embed_scorm_progress_var_id = progressVariableRecord.id;
+            break;
+          }
+        }
       }
+    }
+  }
 
-      case ElementType.embed_scorm: {
-        const scoreVariableRecord = this.addVariableOfType(VariableType.number);
-        scoreVariableRecord.props.var_category = VarCategory.autogenerated;
-        scoreVariableRecord.props.var_track = true;
-        scoreVariableRecord.props.var_default = 0;
-        this.changeRecordName(RT.variable, scoreVariableRecord.id, varNameFromOriginName(record.name));
-        (record as RecordNode<RT.element>).props.embed_scorm_score_var_id = scoreVariableRecord.id;
+  /** 
+   * Function to be used to delete linked variables for element types like SCORM and Media Upload.
+   * Just need to update this function for any other element type to be added in future
+   * Takes the elements as an array and deletes variables from project factory
+   */
+  deleteLinkedVariables<N extends RT>(this: ProjectFactory, records: RecordNode<N>[]): void {
+    for (const record of records) {
+      if (record?.type === RT.element) {
+        switch ((record as RecordNode<RT.element>).props.element_type) {
+          case ElementType.media_upload: {
+            const linkedVarId = (record as RecordNode<RT.element>).props.media_upload_var_id as number;
+            this.deleteRecord(RT.variable, linkedVarId);
+            break;
+          }
 
-        const suspendDataVariableRecord = this.addVariableOfType(VariableType.string);
-        suspendDataVariableRecord.props.var_category = VarCategory.autogenerated;
-        suspendDataVariableRecord.props.var_track = true;
-        suspendDataVariableRecord.props.var_default = 0;
-        this.changeRecordName(RT.variable, suspendDataVariableRecord.id, varNameFromOriginName(record.name));
-        (record as RecordNode<RT.element>).props.embed_scorm_suspend_data_var_id = suspendDataVariableRecord.id;
+          case ElementType.embed_scorm: {
+            const linkedScoreVarId = (record as RecordNode<RT.element>).props.embed_scorm_score_var_id as number;
+            this.deleteRecord(RT.variable, linkedScoreVarId);
 
-        const progressVariableRecord = this.addVariableOfType(VariableType.number);
-        progressVariableRecord.props.var_category = VarCategory.autogenerated;
-        progressVariableRecord.props.var_track = true;
-        progressVariableRecord.props.var_default = 0;
-        this.changeRecordName(RT.variable, progressVariableRecord.id, varNameFromOriginName(record.name));
-        (record as RecordNode<RT.element>).props.embed_scorm_progress_var_id = progressVariableRecord.id;
-        break;
+            const linkedSuspedDataVarId = (record as RecordNode<RT.element>).props.embed_scorm_suspend_data_var_id as number;
+            this.deleteRecord(RT.variable, linkedSuspedDataVarId);
+
+            const linkedProgressVarId = (record as RecordNode<RT.element>).props.embed_scorm_progress_var_id as number;
+            this.deleteRecord(RT.variable, linkedProgressVarId);
+
+            break;
+          }
+        }
       }
     }
   }
@@ -421,13 +415,28 @@ export class ProjectFactory extends RecordFactory<RT.project> {
     if (initialSceneId !== undefined && initialSceneId !== 0) {
       // also check if a scene with this id is valid
       const scene = this.getRecord(RT.scene, initialSceneId);
-      if(scene) {
+      if (scene) {
         return Number(initialSceneId);
       } else {
         return this.getRecordOrder(RT.scene)[0];
       }
     } else {
       return this.getRecordOrder(RT.scene)[0];
+    }
+  }
+
+  addMenuAndTourModeRecord(this: ProjectFactory, sceneId: number) {
+    //Add menu entry. Calling super.addBlankRecord and not ProjectFactory.addBlankRecord because internally it call addRecord, 
+    //would end up in a cyclic call.
+    const menuRecord = super.addBlankRecord(RT.menu, sceneId + 10001);
+    menuRecord.props.menu_scene_id = sceneId;
+    menuRecord.props.menu_show = this.getValueOrDefault(rtp.project.auto_add_new_scene_to_menu);
+
+    // Adding scene details every time to menu prop and making the boolean menu_show true / false based on the value given or default which is true.
+    if (this.getValueOrDefault(rtp.project.auto_add_new_scene_to_tour_mode) === true) {
+      //Making id deterministic (although not needed) - for testing
+      const tourModeRecord = super.addBlankRecord(RT.tour_mode, sceneId + 10002);
+      tourModeRecord.props.tour_mode_scene_id = sceneId;
     }
   }
 
@@ -444,7 +453,7 @@ export class ProjectFactory extends RecordFactory<RT.project> {
   getProjectThumbnail(this: ProjectFactory): string | undefined {
     let thumbnail;
     const initialSceneId = this.getInitialSceneId();
-    if(initialSceneId === undefined) return undefined;
+    if (initialSceneId === undefined) return undefined;
     const scene = this.getRecord(RT.scene, initialSceneId);
     let sceneF: SceneFactory;
     let elementF: ElementFactory;
@@ -477,6 +486,17 @@ export class ProjectFactory extends RecordFactory<RT.project> {
     if (projectLogo !== undefined) {
       fileIds.push(projectLogo.id);
     }
+
+    const customLoader = <en.Source>this.get(rtp.project.custom_loader_source);
+    if (customLoader !== undefined) {
+      fileIds.push(customLoader.id);
+    }
+
+    const projectThumbnail = <en.Source>this.get(rtp.project.project_thumbnail_source);
+    if (projectThumbnail !== undefined) {
+      fileIds.push(projectThumbnail.id);
+    }
+
     return [...new Set(fileIds)]; //Unique ids only
   }
 
@@ -492,6 +512,22 @@ export class ProjectFactory extends RecordFactory<RT.project> {
       const newValue = sourceMap[projectLogo.id];
       if (newValue !== undefined) {
         this.set(rtp.project.project_logo_source, newValue);
+      }
+    }
+
+    const customLoader = <en.Source>this.get(rtp.project.custom_loader_source);
+    if (customLoader !== undefined) {
+      const newValue = sourceMap[customLoader.id];
+      if (newValue !== undefined) {
+        this.set(rtp.project.custom_loader_source, newValue);
+      }
+    }
+
+    const projectThumbnail = <en.Source>this.get(rtp.project.project_thumbnail_source);
+    if (projectThumbnail !== undefined) {
+      const newValue = sourceMap[projectThumbnail.id];
+      if (newValue !== undefined) {
+        this.set(rtp.project.project_thumbnail_source, newValue);
       }
     }
   }
@@ -526,7 +562,7 @@ export class ProjectFactory extends RecordFactory<RT.project> {
           metaArray.push(itemF.get(ItemProperty.item_instruction));
           metaArray.push(itemF.get(ItemProperty.item_text));
           metaArray.push(itemF.get(ItemProperty.phrase));
-          
+
           // 5. Options meta fields
           for (const optionRecord of itemF.getRecords(RT.option)) {
             const optionF = new RecordFactory(optionRecord);
@@ -557,7 +593,7 @@ export class ProjectFactory extends RecordFactory<RT.project> {
           .replace(/_/g, " ") // replace "_" with space
           .replace(/{[^}]*}*/gm, "") // removes {{abc}}
           .replace(/<[^>]*>?/gm, "") // removes html
-        .trim()); 
+          .trim());
   }
 
   /**
@@ -577,11 +613,11 @@ export class ProjectFactory extends RecordFactory<RT.project> {
 
     // * create a map of all possible variable names to look through in rules
     const varDefROM = this.getROM(RT.variable) ?? emptyROM<RT.variable>();
-    const idNameMap: {[key: number]: string} = {};
+    const idNameMap: { [key: number]: string } = {};
 
-    for(const vDef of Object.values(varDefROM.map)) {
+    for (const vDef of Object.values(varDefROM.map)) {
       //If predefined var, get name from definitions. Predefined vars definitions don't need to be present in the project json
-      if(predefinedVariableIdToName[vDef.id] !== undefined) {
+      if (predefinedVariableIdToName[vDef.id] !== undefined) {
         idNameMap[vDef.id] = predefinedVariableIdToName[vDef.id]; //Predefined variable type is also the name
       } {
         idNameMap[vDef.id] = vDef.name as string;
@@ -608,7 +644,7 @@ export class ProjectFactory extends RecordFactory<RT.project> {
             ((r.props.properties || []) as unknown[]).length > 0)
           .forEach(r => {
             // * if the cog object is a variable type, blindly add to our list
-            if(isVariableType(r.props.co_type as VariableType)) {
+            if (isVariableType(r.props.co_type as VariableType)) {
               varsSet.add(r.props.co_id)
             }
 
@@ -623,10 +659,10 @@ export class ProjectFactory extends RecordFactory<RT.project> {
             const properties = (r.props.properties || []) as any[];
             // * properties = ["{{score}}", "{{number}}+{{string}}"] score, number and string are all variable names
             // * the loop has to be on the variable names since the names can be used in a formula too and not just plain templating
-            for(const [key, value] of Object.entries(idNameMap)) {
+            for (const [key, value] of Object.entries(idNameMap)) {
               // check if any of the names is included in the properties array entries
-              for(const p of properties) {
-                if(p.toString().includes(value)) {
+              for (const p of properties) {
+                if (p.toString().includes(value)) {
                   varsSet.add(Number(key));
                 }
               }
@@ -640,7 +676,7 @@ export class ProjectFactory extends RecordFactory<RT.project> {
             ((r.props.properties || []) as unknown[]).length > 0)
           .forEach(r => {
             // * if the cog object is a variable type, blindly add to our list
-            if(isVariableType(r.props.co_type as VariableType)) {
+            if (isVariableType(r.props.co_type as VariableType)) {
               varsSet.add(r.props.co_id)
             }
 
@@ -655,10 +691,10 @@ export class ProjectFactory extends RecordFactory<RT.project> {
             const properties = (r.props.properties || []) as any[];
             // * properties = ["{{score}}", "{{number}}+{{string}}"] score, number and string are all variable names
             // * the loop has to be on the variable names since the names can be used in a formula too and not just plain templating
-            for(const [key, value] of Object.entries(idNameMap)) {
+            for (const [key, value] of Object.entries(idNameMap)) {
               // check if any of the names is included in the properties array entries
-              for(const p of properties) {
-                if(p.toString().includes(value)) {
+              for (const p of properties) {
+                if (p.toString().includes(value)) {
                   varsSet.add(Number(key));
                 }
               }
@@ -670,8 +706,8 @@ export class ProjectFactory extends RecordFactory<RT.project> {
           .forEach((r) => {
             const text = (r.props?.text ?? "") as string;
             // * text = ["{{score}}", "{{number}}+{{string}}"] score, number and string are all variable names
-            for(const [key, value] of Object.entries(idNameMap)) {
-              if(text.includes(value)) {
+            for (const [key, value] of Object.entries(idNameMap)) {
+              if (text.includes(value)) {
                 varsSet.add(Number(key));
               }
             }
@@ -696,28 +732,29 @@ export class ProjectFactory extends RecordFactory<RT.project> {
    * @param obj
    * @param position
    */
-  pasteFromClipboardObject(this: ProjectFactory, obj: ClipboardR, position?: number): void {
-    if(obj.parentType !== this._type) {
-      console.error(`Can't paste this object into a RecordNode of type of ${this._type}`);
+  pasteFromClipboardObject(this: ProjectFactory, { obj, position, groupElementId, sceneId }: { obj: ClipboardR, position?: number, groupElementId?: number, sceneId?: number }): void {
+    if (obj.parentType === RT.scene && sceneId === undefined) {
+      console.error(`Can't paste an element at project level. Please provide a sceneId.`);
       return;
     }
     const projectVars = this.getRecords(RT.variable);
     const scenesFromClipboard = obj.nodes.filter(s => s.type === RT.scene);
     const variablesFromClipboard = obj.nodes.filter(s => s.type === RT.variable);
-    const otherRecordsFromClipboard = obj.nodes.filter(s => s.type !== RT.variable && s.type !== RT.scene);
+    const otherRecordsFromClipboard = obj.nodes.filter(s => s.type !== RT.variable && s.type !== RT.scene && s.type !== RT.element);
+    const elementsFromClipboard = obj.nodes.filter(s => s.type === RT.element)
 
-    for(const rn of variablesFromClipboard) {
+    for (const rn of variablesFromClipboard) {
       // This needs to follow the pasting logic above
       const variable = this.getRecord(RT.variable, rn.id);
-      if(variable === undefined) {
+      if (variable === undefined) {
         // ! variable doesn't exist
         // * check if one with the same name exists or not.
         const nameMatchedVariable = projectVars.find(v => v.name === rn.name);
-        if(nameMatchedVariable) {
+        if (nameMatchedVariable) {
           // * (3) there exists a variable with the same name, we replace ids of rn in any new scenes being pasted with the one already present in the project
           // * Only replace in rules since templating uses names and will continue using them
           // ! Only replace in the scenes being pasted. If there are no scenes to be pasted, this will be a no-op
-          for(const scene of scenesFromClipboard) {
+          for (const scene of scenesFromClipboard) {
             const sceneF = new SceneFactory(scene);
 
             // ! using getAllDeepChildrenWithFilter here to filter results and avoid unnecessary loops
@@ -726,11 +763,11 @@ export class ProjectFactory extends RecordFactory<RT.project> {
             // * find the then action that is using the variable that is being pasted, also ensure that we are modifying only when type of vars match
             const thenActions = sceneF.getAllDeepChildrenWithFilter(RT.then_action, ta => ta.props.co_type === nameMatchedVariable.props.var_type && ta.props.co_id === rn.id);
 
-            for(const we of whenEvents) {
+            for (const we of whenEvents) {
               we.props.co_id = nameMatchedVariable.id;
             }
 
-            for(const ta of thenActions) {
+            for (const ta of thenActions) {
               ta.props.co_id = nameMatchedVariable.id;
             }
           }
@@ -747,38 +784,83 @@ export class ProjectFactory extends RecordFactory<RT.project> {
     }
 
     // * add all scenes
-    for(const scene of scenesFromClipboard) {
+    for (const scene of scenesFromClipboard) {
       // ! Only scenes are inserted in place when position is passed. Have to live with this assumption for now
       // * if position is passed, then keep incrementing to insert in order, else add at the end of the list
-      this.addRecord(scene, position? position++: position);
+      const addedScene = this.addRecord(scene, position ? position++ : position);
+      const sceneF = new SceneFactory(addedScene);
+      const elements = sceneF.getAllDeepChildrenWithFilter(RT.element, e => en.elementsWithLinkedVariables.includes(e.props.element_type as ElementType));
+      this.addLinkedVariables(elements);
     }
 
     // * add all other records
-    for(const other of otherRecordsFromClipboard) {
+    for (const other of otherRecordsFromClipboard) {
       // keep adding to the end of the list
       this.addRecord(other);
     }
+
+    if (sceneId !== undefined && elementsFromClipboard.length > 0) {
+      const scene = this.getRecord(RT.scene, sceneId);
+      const sceneF = new SceneFactory(scene as RecordNode<RT.scene>);
+      if (groupElementId !== undefined) {
+        const group = sceneF.getAllDeepChildrenWithFilter(RT.element, el => el.id === groupElementId);
+        if (group !== undefined) {
+          const groupF = new ElementFactory(group[0]);
+          const addedRecords = groupF.pasteFromClipboardObject({ obj, position });
+          const recordsToAddLinkedVars = this.getAllRecordsForLinkedVariables(addedRecords as RecordNode<RT>[]);
+          this.addLinkedVariables(recordsToAddLinkedVars as RecordNode<RT>[]);
+        }
+      } else {
+        const addedRecords = sceneF.pasteFromClipboardObject({ obj, position, groupElementId });
+        const recordsToAddLinkedVars = this.getAllRecordsForLinkedVariables(addedRecords as RecordNode<RT>[]);
+        this.addLinkedVariables(recordsToAddLinkedVars as RecordNode<RT>[]);
+      }
+    }
+  }
+
+  getAllRecordsForLinkedVariables(this: ProjectFactory, records: RecordNode<RT>[]) {
+    const recordsToAddLinkedVars: RecordNode<RT.element>[] = [];
+
+    for (const record of records) {
+      switch (record?.props.element_type) {
+        case en.ElementType.group: {
+          const recordGroupF = new ElementFactory(record);
+          const allGroupChildrenWithLinkedVariables = recordGroupF.getAllDeepChildrenWithFilter(RT.element, e => en.elementsWithLinkedVariables.includes(e?.props.element_type as ElementType));
+          recordsToAddLinkedVars.push(...allGroupChildrenWithLinkedVariables);
+          break;
+        }
+
+        default: {
+          if (en.elementsWithLinkedVariables.includes(record?.props.element_type as ElementType)) {
+            recordsToAddLinkedVars.push(record as RecordNode<RT>);
+          }
+          break;
+        }
+      }
+    }
+
+    return recordsToAddLinkedVars;
   }
 
   /**
    * Overriding this function from base class as there is element specific code.
    * Check base class implementation for reference on function usage and examples
    */
-  reParentRecordsWithAddress(this: ProjectFactory, destParentAddr: string, sourceRecordAddr: {parentAddr: string, recordAddr: string}[], destPosition?: number): [RecordNode<RT>[], RecordNode<RT>[]] {
+  reParentRecordsWithAddress(this: ProjectFactory, destParentAddr: string, sourceRecordAddr: { parentAddr: string, recordAddr: string }[], destPosition?: number): [RecordNode<RT>[], RecordNode<RT>[]] {
     const destParentRecord = this.getRecordAtAddress(destParentAddr);
     const reParentedRecords: RecordNode<RT>[] = [];
     const failedReParentedRecords: RecordNode<RT>[] = [];
 
-    if(destParentRecord === null) {
+    if (destParentRecord === null) {
       console.error(`[reParentRecordsWithAddress]: Error in re-parenting. destParentAddr: ${destParentAddr}`);
       return [reParentedRecords, failedReParentedRecords];
     }
 
     const destinationParentRecordF = new RecordFactory(destParentRecord);
-    for(const s of sourceRecordAddr) {
+    for (const s of sourceRecordAddr) {
       const sourceRecord = this.getRecordAtAddress(s.recordAddr);
       const sourceParentRecord = this.getRecordAtAddress(s.parentAddr);
-      if(sourceRecord === null || sourceParentRecord === null) {
+      if (sourceRecord === null || sourceParentRecord === null) {
         console.error(`[delete-sourceRecordAddresses]: can't find record/parent for : recordAddr: ${s.recordAddr} parentAddr: ${s.recordAddr}`);
         continue;
       }
@@ -800,10 +882,10 @@ export class ProjectFactory extends RecordFactory<RT.project> {
        * So a special check needs to be made when sourceRecord and destParentRecord both have ** type === element **
        * we need to check that sourceRecord.props.element_type !== group, only then allow re-parenting
        */
-      if(sourceRecord.type === RT.element && destParentRecord.type === RT.element) {
+      if (sourceRecord.type === RT.element && destParentRecord.type === RT.element) {
         const sourceRecordElementType = sourceRecord.props.element_type;
         const destParentRecordElementType = sourceRecord.props.element_type;
-        if(destParentRecordElementType === en.ElementType.group && sourceRecordElementType === en.ElementType.group) {
+        if (destParentRecordElementType === en.ElementType.group && sourceRecordElementType === en.ElementType.group) {
           failedReParentedRecords.push(sourceRecord);
           continue;
         }
@@ -813,7 +895,7 @@ export class ProjectFactory extends RecordFactory<RT.project> {
       // * addRecord takes care of name clashes and id clashes
       const addedRecord = destinationParentRecordF.addRecord(sourceRecord, destPosition);
       // * Record was added correctly to the appropriate parent
-      if(addedRecord !== undefined) {
+      if (addedRecord !== undefined) {
         // * delete the record from resp parents
         const sourceParentRecordF = new RecordFactory(sourceParentRecord);
         sourceParentRecordF.deleteRecord(sourceRecord.type as RT, sourceRecord.id);
@@ -834,7 +916,7 @@ export class ProjectFactory extends RecordFactory<RT.project> {
     const sceneIdsFroMenuSet = new Set(this.getRecords(RT.menu).map(m => m.props.menu_scene_id as number));
     //If both above sets are equal, return.
     //Set equality test is (union's length = intersection's length)
-    if(union(sceneIdsSet, sceneIdsFroMenuSet).size === 
+    if (union(sceneIdsSet, sceneIdsFroMenuSet).size ===
       intersection(sceneIdsSet, sceneIdsFroMenuSet).size) {
       return;
     }
@@ -843,15 +925,15 @@ export class ProjectFactory extends RecordFactory<RT.project> {
     //For scenes in SceneList, but not in MenuList, add them to menu
     const toBeAddedToMenu = difference(sceneIdsSet, sceneIdsFroMenuSet);
 
-    for(const sid of toBeRemovedFromMenu.values()) {
+    for (const sid of toBeRemovedFromMenu.values()) {
       //Find which menu record is to be removed
       const removeMenuRecords = this.getRecords(RT.menu).filter(m => m.props.menu_scene_id === sid);
-      for(const mr of removeMenuRecords) {
+      for (const mr of removeMenuRecords) {
         this.deleteRecord(RT.menu, mr.id);
       }
     }
 
-    for(const sid of toBeAddedToMenu.values()) {
+    for (const sid of toBeAddedToMenu.values()) {
       const menuRecord = super.addBlankRecord(RT.menu, sid + 10001);
       menuRecord.props.menu_scene_id = sid;
       //Because this is the fix of an error, don't surprise users with extra menu entries
@@ -865,12 +947,18 @@ export class ProjectUtils {
   accentColorsDict: { [key: string]: number[] };
   elementNamesDict: { [key: string]: number[] };
   variableNamesDict: { [key: string]: number[] };
+  propsNameDict: { [key: string]: number[] };
+  actionDict: { [key: string]: number[] };
+  eventsDict: { [key: string]: number[] };
 
   constructor() {
     this.ruleNamesDict = {};
     this.accentColorsDict = {};
     this.elementNamesDict = {};
     this.variableNamesDict = {};
+    this.propsNameDict = {};
+    this.actionDict = {};
+    this.eventsDict = {};
   }
 
   buildRulesDictionary = (project: RecordNode<RT.project>, sceneId: number): void => {
@@ -878,6 +966,9 @@ export class ProjectUtils {
     this.accentColorsDict = {};
     this.elementNamesDict = {};
     this.variableNamesDict = {};
+    this.propsNameDict = {};
+    this.actionDict = {};
+    this.eventsDict = {};
 
     const projectF = new ProjectFactory(project);
     const scene = projectF.getRecord(RT.scene, sceneId);
@@ -888,14 +979,14 @@ export class ProjectUtils {
 
       for (const rule of rules) {
         const ruleF = new RecordFactory(rule);
-        
+
         const ruleName = ruleF.getName()?.trim().toLowerCase();
         const accentColor = (ruleF.getValueOrDefault(rtp.rule.accent_color) as string).trim().toLowerCase();
         const ruleId = ruleF.getId();
 
         // rule name entry
         if (ruleName) {
-          this.ruleNamesDict[ruleName] ? 
+          this.ruleNamesDict[ruleName] ?
             this.ruleNamesDict[ruleName].push(ruleId) :
             this.ruleNamesDict[ruleName] = [ruleId];
         }
@@ -906,16 +997,15 @@ export class ProjectUtils {
             this.accentColorsDict[accentColor].push(ruleId) :
             this.accentColorsDict[accentColor] = [ruleId];
         }
-        
+
         // element and variable names entries
         const elements = sceneF.getAllDeepChildren(RT.element);
-
         const whenEvents = ruleF.getRecords(RT.when_event);
+
         for (const we of whenEvents) {
-          // const whenEventF = new RecordFactory(we);
           const coId = we.props.co_id as number;
           const element = elements.find(ele => ele.id === coId);
-          const variable = sceneF.getRecord(RT.variable, coId);
+          const variable = projectF.getRecord(RT.variable, coId);
           if (element) {
             const eleName = element.name?.trim().toLowerCase();
             if (eleName) {
@@ -924,6 +1014,11 @@ export class ProjectUtils {
                 this.elementNamesDict[eleName] = [ruleId];
             }
           }
+
+          const event = we.props.event as string;
+          this.eventsDict[event] ?
+            this.eventsDict[event].push(ruleId) :
+            this.eventsDict[event] = [ruleId];
 
           if (variable) {
             const varName = variable.name?.trim().toLowerCase();
@@ -939,7 +1034,7 @@ export class ProjectUtils {
         for (const ta of thenActions) {
           // const whenEventF = new RecordFactory(we);
           const coId = ta.props.co_id as number;
-          const element = sceneF.getRecord(RT.element, coId);
+          const element = elements.find(ele => ele.id === coId);
           const variable = projectF.getRecord(RT.variable, coId);
 
           if (element) {
@@ -949,6 +1044,83 @@ export class ProjectUtils {
                 this.elementNamesDict[eleName].push(ruleId) :
                 this.elementNamesDict[eleName] = [ruleId];
             }
+          }
+
+          const action = ta.props.action as string;
+          this.actionDict[action] ?
+            this.actionDict[action].push(ruleId) :
+            this.actionDict[action] = [ruleId];
+
+          switch (ta.props.action) {
+            case RuleAction.open_url:
+            case RuleAction.call_api:
+            case RuleAction.load_project:
+            case RuleAction.set_to_formula:
+            case RuleAction.set_to_string:
+            case RuleAction.copy_to_clipboard:
+            case RuleAction.replace_screen_reader_text:
+            case RuleAction.set_to_number:
+            case RuleAction.add_number: {
+              if (Array.isArray(ta.props.properties)) {
+                for(const p of ((ta.props.properties ?? []) as string[])) {
+                  this.propsNameDict[p] ?
+                    this.propsNameDict[p].push(ruleId) :
+                    this.propsNameDict[p] = [ruleId];
+                }
+              }
+              break;
+            }
+
+            case RuleAction.point_to:
+            case RuleAction.seek_to_timer:
+            case RuleAction.teleport: {
+              if (Array.isArray(ta.props.properties)) {
+                const elem_id = ta.props.properties[0] as number;
+                const element = elements.find(ele => ele.id === elem_id);
+                const elementName = element?.name?.trim().toLowerCase();
+
+                if (elementName) {
+                  this.propsNameDict[elementName] ?
+                    this.propsNameDict[elementName].push(ruleId) :
+                    this.propsNameDict[elementName] = [ruleId];
+                }
+              }
+
+              break;
+            }
+
+            case RuleAction.change_scene: {
+              if (Array.isArray(ta.props.properties)) {
+                const sceneId = ta.props.properties[0] as number;
+                const scene = projectF.getRecord(RT.scene, sceneId);
+                const sceneName = scene?.name?.trim().toLowerCase();
+                if(sceneName) {
+                  this.propsNameDict[sceneName] ?
+                    this.propsNameDict[sceneName].push(ruleId) :
+                    this.propsNameDict[sceneName] = [ruleId];
+                }
+              }
+              break;
+            }
+            case RuleAction.hide_item:
+            case RuleAction.show_item: {
+              if (Array.isArray(ta.props.properties)) {
+                const itemId = ta.props.properties[0] as number;
+                const items = sceneF.getAllDeepChildrenWithFilter(RT.item, (ele => ele.id === itemId));
+
+                for(const i of items) {
+                  const itemName = i.name?.trim().toLowerCase();
+                  if(itemName) {
+                    this.propsNameDict[itemName] ?
+                      this.propsNameDict[itemName].push(ruleId) :
+                      this.propsNameDict[itemName] = [ruleId];
+                  }
+                }
+              }
+              break;
+            }
+            default:
+              break;
           }
 
           if (variable) {
@@ -962,7 +1134,7 @@ export class ProjectUtils {
         }
       }
     }
-  }
+  };
 
   simpleSearchInRules({ searchString, accentColor }: {
     searchString: string;
@@ -989,7 +1161,16 @@ export class ProjectUtils {
     const matchingVariableNames: string[] = Object.keys(this.variableNamesDict).filter((key: string) => key.includes(searchString.trim().toLowerCase()));
     const idsForVariableNames: number[] = flatten(matchingVariableNames.map((key: string) => this.variableNamesDict[key]));
 
-    const concatenatedRuleIds: number[] = idsForElementNames.concat(idsForRuleNames).concat(idsForVariableNames);
+    const matchingEvents: string[] = Object.keys(this.eventsDict).filter((key: string) => key.includes(searchString.trim().toLowerCase()));
+    const idsForEvents: number[] = flatten(matchingEvents.map((key: string) => this.eventsDict[key]));
+
+    const matchingAction: string[] = Object.keys(this.actionDict).filter((key: string) => key.includes(searchString.trim().toLowerCase()));
+    const idsForAction: number[] = flatten(matchingAction.map((key: string) => this.actionDict[key]));
+
+    const matchingProps: string[] = Object.keys(this.propsNameDict).filter((key: string) => key.includes(searchString.trim().toLowerCase()));
+    const idsForProps: number[] = flatten(matchingProps.map((key: string) => this.propsNameDict[key]));
+
+    const concatenatedRuleIds: number[] = idsForElementNames.concat(idsForRuleNames).concat(idsForVariableNames).concat(idsForEvents).concat(idsForAction).concat(idsForProps);
     let outputRuleIds: number[] = concatenatedRuleIds;
     if (searchString && accentColor) {
       const intersection = jsUtils.intersection(new Set(idsForAccentColor), new Set(concatenatedRuleIds));
@@ -997,18 +1178,6 @@ export class ProjectUtils {
     }
 
     return uniq(outputRuleIds);
-  }
-
-  static createNewProject = (): RecordNode<RT.project> => {
-    const project = createRecord(RT.project);
-    const projectF = new ProjectFactory(project);
-    // ! IMPORTANT - Set version = 100, so that m099_100_initial_r_migration migration is not applied.
-    // ! m099_100_initial_r_migration operates on project json of type `t` and will induce unwanted side-effects when a `r` type project json is passed to it
-    projectF.set(rtp.project.version, 100);
-    const scene = projectF.addBlankRecord(RT.scene);
-    const sceneF = new SceneFactory(scene);
-    projectF.addElementOfTypeToScene({ sceneId: scene.id, elementType: ElementType.pano_image });
-    return project;
   }
 
   /**
@@ -1034,11 +1203,11 @@ export class ProjectUtils {
   static updateStringTemplates(records: RecordNode<RT>[], oldVarName: string, newVarName: string): void {
     const searchValue = new RegExp(`({{[s]*${oldVarName}[s]*}})+`, "gm");
     const replaceValue = `{{${newVarName}}}`;
-    for(const record of records) {
-      switch(record.type) {
+    for (const record of records) {
+      switch (record.type) {
         case RT.element: {
           const elementRecord = (record as RecordNode<RT.element>);
-          switch(elementRecord.props.element_type) {
+          switch (elementRecord.props.element_type) {
             case ElementType.text: {
               const oldString = elementRecord.props.text as string;
               elementRecord.props.text = oldString.replace(searchValue, replaceValue);
