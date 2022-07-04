@@ -20,6 +20,7 @@ import variableCheckJson from "./jsons/variable_check.json";
 import menuConsistencyJson from "./jsons/menu_consistency.json";
 import { ElementType } from "../../src/r/definitions/elements";
 import copyPasteElementSampleJson from "./jsons/copyPasteElementSampleJson.json";
+import oneSceneWithGroupJson from "./jsons/oneSceneWithGroup.json";
 
 const reprentingClone = jsUtils.deepClone(project_reparenting);
 const { deepClone } = jsUtils;
@@ -145,75 +146,49 @@ describe("Test RecordNode addresses", () => {
     expect(invalidScene).to.be.null;
   });
 
-  it("gets the correct record node and it's parent at an address", () => {
-    const elementVideoFlatInSceneLearn = recordF.getRecordAndParentAtAddress("project:1|scene:1584636875821|element:1584732363809|element:1584638773856");
-    expect(elementVideoFlatInSceneLearn?.c).not.equal(null);
-    expect(elementVideoFlatInSceneLearn?.p).not.equal(null);
+  it("should add scorm element and respective linked variables", () => {
+    const projectF = r.project(oneSceneWithGroupJson);
+    const scenes = projectF.getRecords(RT.scene);
+    const scene1 = scenes?.[0];
 
-    const sceneHome = recordF.getRecordAndParentAtAddress("project:1|scene:1584704711152");
-    expect(sceneHome?.c.id).to.equal(1584704711152);
+    const embedScormRecord = projectF.addElementOfTypeToScene({ sceneId: scene1.id, elementType: en.ElementType.embed_scorm }) as R.RecordNode<RT.element>;
+    const scormKeys = Object.keys(embedScormRecord);
+    expect(scormKeys.includes("embed_scorm_score_var_id"));
+    expect(scormKeys.includes("embed_scorm_suspend_data_var_id"));
+    expect(scormKeys.includes("embed_scorm_progress_var_id"));
 
-    const invalidScene = recordF.getRecordAndParentAtAddress("project:1|scene");
-    expect(invalidScene).to.be.null;
+    const variables = projectF.getRecords(RT.variable);
+
+    const variableIds = variables.map(v => v.id);
+    expect(variableIds.includes(embedScormRecord.props.embed_scorm_score_var_id as number));
+    expect(variableIds.includes(embedScormRecord.props.embed_scorm_suspend_data_var_id as number));
+    expect(variableIds.includes(embedScormRecord.props.embed_scorm_progress_var_id as number));
   });
 
-  it("should update scene property values at address", () => {
-    const st1 = performance.now();
-    const updated = recordF.updatePropertyAtAddress("project:1|scene:1584704711152!scene_yaw_start", 140);
-    const et1 = performance.now();
-    console.log(`Time taken: [updatePropertyAtAddress]: (project:1|scene:1584704711152!scene_yaw_start, 140)`, (et1 - st1) + " ms");
-    expect(updated).to.equal(true);
-    const sceneHome = recordF.getRecord(RT.scene, 1584704711152);
-    expect(sceneHome?.props.scene_yaw_start).to.equal(140);
-  });
+  it("should duplicate scorm element with new linked variables attached", () => {
+    const projectF = r.project(oneSceneWithGroupJson);
+    const scenes = projectF.getRecords(RT.scene);
+    const scene1 = scenes?.[0];
+    const sceneF = r.scene(scene1);
 
-  it("should test element property(non-indexed) updates at address", () => {
-    const st2 = performance.now();
-    const elementUpdated = recordF.updatePropertyAtAddress("project:1|scene:1584636875821|element:1584732363809|element:1584638773856!opacity", 0.45);
-    const et2 = performance.now();
-    console.log(`Time taken: [updatePropertyAtAddress]: (project:1|scene:1584636875821|element:1584732363809|element:1584638773856!opacity, 0.45) `, (et2 - st2) + " ms");
-    expect(elementUpdated).to.equal(true);
+    const elements = sceneF.getRecords(RT.element);
+    const scormElements = elements.filter(el => el.props.element_type === en.ElementType.embed_scorm);
 
-    const updatedElement = recordF.getRecordAtAddress("project:1|scene:1584636875821|element:1584732363809|element:1584638773856");
-    expect(updatedElement?.props.opacity).to.equal(0.45);
-  });
+    const embedScormElementTwo = projectF.duplicateSceneSubRecord(scene1.id, RT.element, scormElements[0].id);
+    if (embedScormElementTwo) {
+      const scormKeysTwo = Object.keys(embedScormElementTwo);
+      expect(scormKeysTwo.includes("embed_scorm_score_var_id"));
+      expect(scormKeysTwo.includes("embed_scorm_suspend_data_var_id"));
+      expect(scormKeysTwo.includes("embed_scorm_progress_var_id"));
 
-  it("should test element property(indexed) updates at address", () => {
-    const st2 = performance.now();
-    const elementUpdated = recordF.updatePropertyAtAddress("project:1|scene:1584636875821|element:1584732363809|element:1584638773856!placer_3d>3", 999);
-    const et2 = performance.now();
-    console.log(`Time taken: [updatePropertyAtAddress]: (project:1|scene:1584636875821|element:1584732363809|element:1584638773856!placer_3d>3, 999) `, (et2 - st2) + " ms");
-    expect(elementUpdated).to.equal(true);
+      const variables = projectF.getRecords(RT.variable);
 
-    const updatedElement = recordF.getRecordAtAddress("project:1|scene:1584636875821|element:1584732363809|element:1584638773856");
-    expect((updatedElement?.props?.placer_3d as number[])?.[3]).to.equal(999);
-
-    const invalidElementUpdated = recordF.updatePropertyAtAddress("project:1|scene:1584636875821|element:1584732363809|element:1584638773856!placer_3d", 999);
-    expect(invalidElementUpdated).to.equal(false);
-  });
-  it("measures performance of 100 calls", () => {
-    const st = performance.now();
-    for (let i = 0; i < 100; i++) {
-      recordF.getRecordAtAddress("project:1|scene:1584636875821|element:1584732363809|element:1584638773856");
+      const variableIds = variables.map(v => v.id);
+      expect(variableIds.includes(embedScormElementTwo.props.embed_scorm_score_var_id as number));
+      expect(variableIds.includes(embedScormElementTwo.props.embed_scorm_suspend_data_var_id as number));
+      expect(variableIds.includes(embedScormElementTwo.props.embed_scorm_progress_var_id as number));
     }
-    const et = performance.now();
-    console.log(`Time taken (100x): [getRecordAtAddress]: project:1|scene:1584636875821|element:1584732363809|element:1584638773856`, ((et - st) / 100) + " ms");
-
-    const st1 = performance.now();
-    for (let i = 0; i < 1000; i++) {
-      recordF.getRecordAtAddress("project:1|scene:1584636875821|element:1584732363809|element:1584638773856");
-    }
-    const et1 = performance.now();
-    console.log(`Time taken (1000x): [getRecordAtAddress]: project:1|scene:1584636875821|element:1584732363809|element:1584638773856`, ((et1 - st1) / 1000) + " ms");
-
-    const st2 = performance.now();
-    for (let i = 0; i < 100; i++) {
-      recordF.updatePropertyAtAddress("project:1|scene:1584636875821|element:1584732363809|element:1584638773856!placer_3d>3", 999);
-    }
-    const et2 = performance.now();
-    console.log(`Time taken (100x): [updatePropertyAtAddress]: (project:1|scene:1584636875821|element:1584732363809|element:1584638773856!placer_3d>3, 999) `, ((et2 - st2) / 100) + " ms");
   });
-});
 
 describe("test for clipboard operations", () => {
   const projectF = r.project(project_variable_template);
