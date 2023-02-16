@@ -45,7 +45,7 @@ steps:
   - git push --tags origin ${DRONE_BRANCH}
 
 - name: npm-publish-main
-  image: plugins/npm
+  image: gmetrixr/baseimage:node-16-dev-v1
   environment:
     REGISTRY_TOKEN:
       from_secret: npm_token
