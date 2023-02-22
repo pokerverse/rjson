@@ -1,4 +1,4 @@
-import { getHighestProjectVersion, newProjectMigrationTree, rMigrationTree } from "./rMigrations";
+import { getHighestProjectVersion, newProjectMigrationTree, rMigrationTree, healthCheckMigration, confirmNoCorruption } from "./migrationLists";
 import initialRMigration from "./r-migration-commands/m099_100_initial_r_migration";
 import { RT } from "../../r/R/RecordTypes";
 import { RecordNode } from "../../r/R/RecordNode";
@@ -35,6 +35,9 @@ export const migrateProjectRJson = (projectJson: any, uptoVersion?: number): Rec
   return rProjectJson;
 }
 
+/**
+ * Migrations to be run only on a new project (once)
+ */
 export const migrationsForNewProject = (projectJson: any): RecordNode<RT.project> => {
   const rProjectJson = projectJson as RecordNode<RT.project>;
   for(const key of newProjectMigrationVersions) {
@@ -42,6 +45,16 @@ export const migrationsForNewProject = (projectJson: any): RecordNode<RT.project
   }
   return rProjectJson;
 }
+
+/**
+ * Healthcheck migrations that are supposed to be run many times, ideally on the server
+ * WIP
+ */
+export const runHealthCheckMigrations = (projectJson: RecordNode<RT.project>): {projectJson: RecordNode<RT.project>, corrections: string[]} => {
+  const rProjectJson = projectJson as RecordNode<RT.project>;
+  const {corrections} = healthCheckMigration.execute(rProjectJson);
+  return {projectJson: rProjectJson, corrections};
+} 
 
 export const createNewProject = (): RecordNode<RT.project> => {
   const project = R.createRecord(RT.project);
@@ -53,4 +66,4 @@ export const createNewProject = (): RecordNode<RT.project> => {
   return project;
 }
 
-export { getHighestProjectVersion };
+export { getHighestProjectVersion, confirmNoCorruption };

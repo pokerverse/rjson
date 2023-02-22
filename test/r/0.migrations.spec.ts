@@ -1,5 +1,5 @@
 import { expect } from "chai";
-import {r, migrateProjectRJson, rUtils, en, RT, RecordNode, createNewProject, migrateDeployment, createNewDeployment, rtp} from "../../src";
+import {r, migrations, en, RT, RecordNode, rtp} from "../../src";
 import { migrateElement } from "../../src/migrations/project/r-migration-commands/m099_100_initial_r_migration";
 import fs from "fs";
 import safehands_r0 from "./jsons/safehands.r0.json";
@@ -7,7 +7,7 @@ import safehands_r100 from "./jsons/safehands.r100.json";
 import safehands_r101 from "./jsons/safehands.r101.json";
 import platformVarMigrationJson from "./jsons/platform_var_migration.json";
 import colliderBoxJson from "./jsons/scenesWithColliderBoxElements.json";
-import { rMigrationTree } from "./../../src/migrations/project/rMigrations";
+import projectJsonCorruptionTest from "./jsons/project_json_corruption_test.json";
 
 import actionbar_json         from "./jsons/r3fJsons/elements/actionbar.json";
 import ar_json                from "./jsons/r3fJsons/elements/ar.json";
@@ -36,6 +36,8 @@ import timer_json             from "./jsons/r3fJsons/elements/timer.json";
 import torus_json             from "./jsons/r3fJsons/elements/torus.json";
 import videoFlat_json         from "./jsons/r3fJsons/elements/videoFlat.json";
 import { VarCategory } from "../../src/r/definitions/variables";
+
+const { migrateProjectRJson, createNewProject, migrateDeployment, runHealthCheckMigrations, confirmNoCorruption} = migrations;
 
 describe("r Migrations", () => {
   xit("should test r migration", () => {
@@ -87,7 +89,7 @@ describe("r Migrations", () => {
   });
 
   it("should test migrations on a new project", () => {
-    const newProject =  createNewProject();
+    const newProject = createNewProject();
     const projectF = r.project(newProject);
     const initialSceneId = projectF.getInitialSceneId();
     // 100111 is the default id injected when migrating from a t -> r project json
@@ -146,5 +148,13 @@ describe("r Migrations", () => {
       const elementF = r.element(el);
       expect(elementF.get(rtp.element.volume_type)).to.be.eq(en.VolumeTypes.cube);
     }
+  })
+
+  it ("should test if json corruption issue get resolved", () => {
+    expect(confirmNoCorruption(projectJsonCorruptionTest)).to.be.false;
+
+    const {projectJson: fixedProject, corrections} = runHealthCheckMigrations(projectJsonCorruptionTest);
+    console.log(corrections);
+    expect(confirmNoCorruption(fixedProject)).to.be.true;
   })
 });
